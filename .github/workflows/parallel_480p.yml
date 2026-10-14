@@ -18,12 +18,14 @@ jobs:
   download_and_split:
     runs-on: ubuntu-latest
     steps:
-      - name: Download Video (Using Pre-installed yt-dlp)
+      - name: Install FFmpeg & yt-dlp
         run: |
-          # සර්වර් එකේ yt-dlp නැත්නම් කෙලින්ම Binary එක ඩවුන්ලෝඩ් කරගැනීම (තත්පර 2යි)
+          sudo apt-get update && sudo apt-get install -y ffmpeg
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
 
+      - name: Download Video
+        run: |
           yt-dlp "${{ github.event.inputs.video_url }}" \
             --impersonate chrome \
             -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
@@ -62,6 +64,10 @@ jobs:
       matrix:
         part: [0, 1, 2, 3]
     steps:
+      - name: Install FFmpeg on Worker
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Download Assigned Part
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,6 +93,10 @@ jobs:
     needs: encode_parallel
     runs-on: ubuntu-latest
     steps:
+      - name: Install FFmpeg on Merger
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Download All Encoded Parts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
