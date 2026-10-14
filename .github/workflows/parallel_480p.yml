@@ -18,18 +18,16 @@ jobs:
   download_and_split:
     runs-on: ubuntu-latest
     steps:
-      - name: Fast Install yt-dlp
+      - name: Download Video (Using Pre-installed yt-dlp)
         run: |
-          pip install uv
-          uv pip install --system "yt-dlp[default,curl-cffi]"
+          # සර්වර් එකේ yt-dlp නැත්නම් කෙලින්ම Binary එක ඩවුන්ලෝඩ් කරගැනීම (තත්පර 2යි)
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
 
-      - name: Download Video
-        run: |
           yt-dlp "${{ github.event.inputs.video_url }}" \
             --impersonate chrome \
             -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
             --merge-output-format mp4 \
-            --external-downloader aria2c \
             -o "full_input.mp4"
 
       - name: Split into 4 Equal Parts
