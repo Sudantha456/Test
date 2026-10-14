@@ -18,6 +18,9 @@ jobs:
   download_and_split:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repo (Fixes Git Error)
+        uses: actions/checkout@v4
+
       - name: Install FFmpeg & yt-dlp
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -64,6 +67,9 @@ jobs:
       matrix:
         part: [0, 1, 2, 3]
     steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
       - name: Install FFmpeg on Worker
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -93,6 +99,9 @@ jobs:
     needs: encode_parallel
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
       - name: Install FFmpeg on Merger
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
