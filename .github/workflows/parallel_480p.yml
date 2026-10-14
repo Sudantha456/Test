@@ -1,0 +1,146 @@
+name: 4-VM Parallel 480p Video Converter
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Video URL (YouTube / Direct / M3U8)'
+        required: true
+      output_name:
+        description: 'Output Video Name (හිස්තැන් නැතුව, උදා: movie_480p)'
+        default: 'video_480p'
+        required: true
+
+# Releases හරහා ෆයිල් හුවමාරු කරන්න සහ අවසාන වීඩියෝව දාන්න මේ අවසරය අත්‍යවශ්‍යයි
+permissions:
+  contents: write
+
+jobs:
+  # =========================================================================
+  # පියවර 1: වීඩියෝව ඩවුන්ලෝඩ් කර සමාන කොටස් 4කට කැපීම
+  # =========================================================================
+  download_and_split:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free up Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+
+      - name: Fast Install yt-dlp
+        run: |
+          pip install uv
+          uv pip install --system "yt-dlp[default,curl-cffi]"
+
+      - name: Download Video
+        run: |
+          yt-dlp "${{ github.event.inputs.video_url }}" \
+            --impersonate chrome \
+            -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+            --merge-output-format mp4 \
+            --external-downloader aria2c \
+            --external-downloader-args "-x 16 -s 16 -k 1M" \
+            -o "full_input.mp4"
+
+      - name: Split into 4 Equal Parts (Zero Re-encoding)
+        run: |
+          python3 - << 'EOF'
+          import subprocess, math
+
+          # වීඩියෝ එකේ මුළු තත්පර ගාණ ලබාගැනීම
+          cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", "full_input.mp4"]
+          duration = float(subprocess.check_output(cmd).decode().strip())
+          part_len = math.ceil(duration / 4)
+          print(f"Total Duration: {duration}s | Each Part: ~{part_len}s")
+
+          # තත්පර 5න් කෑලි 4කට කැපීම (-c copy)
+          subprocess.run([
+              "ffmpeg", "-i", "full_input.mp4",
+              "-c", "copy", "-map", "0",
+              "-f", "segment", "-segment_time", str(part_len),
+              "-reset_timestamps", "1",
+              "raw_part_%d.mp4"
+          ], check=True)
+          EOF
+
+      - name: Upload Raw Parts to Temp Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # කොටස් 4ට අඩුවෙන් හැදුනොත් (ඉතා පොඩි වීඩියෝවක් නම්) හිස් ෆයිල් නොවැටෙන්න පරීක්ෂා කිරීම
+          gh release delete temp-work-${{ github.run_id }} -y || true
+          gh release create temp-work-${{ github.run_id }} --prerelease --title "Temp Workspace" --notes "Temporary chunks"
+          gh release upload temp-work-${{ github.run_id }} raw_part_*.mp4 --clobber
+
+  # =========================================================================
+  # පියවර 2: එකම වෙලාවේ VMs 4ක් ඔන් කර කොටස් 4ම 480p වලට හැරවීම
+  # =========================================================================
+  encode_parallel:
+    needs: download_and_split
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [0, 1, 2, 3] # <-- මේකෙන් තමයි එකපාර VMs 4ක් ඔන් වෙන්නේ!
+    steps:
+      - name: Download Assigned Part (Part ${{ matrix.part }})
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download temp-work-${{ github.run_id }} -p "raw_part_${{ matrix.part }}.mp4" || echo "Part not needed"
+
+      - name: Encode Part ${{ matrix.part }} to 480p
+        run: |
+          if [ -f "raw_part_${{ matrix.part }}.mp4" ]; then
+            ffmpeg -y -i "raw_part_${{ matrix.part }}.mp4" \
+              -vf "scale=-2:480" \
+              -c:v libx264 -preset veryfast -crf 24 \
+              -c:a aac -b:a 128k \
+              -threads 4 \
+              "encoded_part_${{ matrix.part }}.mp4"
+          fi
+
+      - name: Upload Encoded Part ${{ matrix.part }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f "encoded_part_${{ matrix.part }}.mp4" ]; then
+            gh release upload temp-work-${{ github.run_id }} "encoded_part_${{ matrix.part }}.mp4" --clobber
+          fi
+
+  # =========================================================================
+  # පියවර 3: 480p කොටස් 4 තනි වීඩියෝවක් කර Releases වලට දැමීම
+  # =========================================================================
+  merge_and_publish:
+    needs: encode_parallel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All 4 Encoded Parts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download temp-work-${{ github.run_id }} -p "encoded_part_*.mp4"
+
+      - name: Merge into Single 480p Video
+        run: |
+          # කොටස් 4 පිළිවෙලට ලැයිස්තුගත කිරීම
+          for f in $(ls encoded_part_*.mp4 | sort -V); do
+            echo "file '$f'" >> concat_list.txt
+          done
+
+          # තත්පර 5න් කෑලි 4 එකට ඇලවීම
+          ffmpeg -y -f concat -safe 0 -i concat_list.txt -c copy "${{ github.event.inputs.output_name }}.mp4"
+
+      - name: Publish Final Video & Clean Up Temp Files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # අවසාන වීඩියෝව 'videos' කියන Release එකට දැමීම
+          gh release view videos || gh release create videos --title "Converted 480p Videos" --notes "Ready to download/stream"
+          gh release upload videos "${{ github.event.inputs.output_name }}.mp4" --clobber
+
+          # තාවකාලික කෑලි දාපු Release එක සම්පූර්ණයෙන්ම මකා දැමීම
+          gh release delete temp-work-${{ github.run_id }} --cleanup-tag -y
+          
